@@ -6,3 +6,11 @@
 *.vcxproj
 
 *.user
+
+task1.sbatch
+
+task3
+
+*.tlog
+
+x64/Debug/

@@ -1535,15 +1535,11 @@ __global__ void funk_time(double* T, double* T_do, double* TT, int* i)
     return;
 }
 
-__global__ void funk_my(double2* s, double* Watch, double* Watch2, double* dev_list, double* T)
+__global__ void funk_my(double2* s, double* Watch, double* Watch2, double* Watch3)
 {
-    *T = 0.00002;  // 0.00003;
     *Watch = s[wat_].x;
     *Watch2 = s[wat2_].x;
-    for (int i = 0; i < list_size; i++)
-    {
-        dev_list[i] = s[list1_ + i].x;
-    }
+    *Watch3 = s[wat3_].x;
 
     return;
 }
@@ -1895,6 +1891,40 @@ __global__ void Ker_Dekard(double2* s, double2* u, double2* s2, double2* u2, dou
     }
 }
 
+
+__global__ void add2_bound(double2* s, double2* u, double2* s2, double2* u2, double* T, double* T_do, double* TT, int method, int step)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;   // Глобальный индекс текущей ячейки (текущего потока)
+    int n = index % N;                                   // номер ячейки по x (от 0)
+    int m = (index - n) / N;                             // номер ячейки по y (от 0)
+
+    if (n != 0) // Если отдельно ввели неотражающие граничные условия   && n != N - 1
+    {
+        return;
+    }
+
+
+    if (n == 0)
+    {
+        double pp2 = s2[(m)*N + n + 1].y;
+        double uu2 = u2[(m)*N + n + 1].x;
+        double2 s_do = s[index];
+        double2 u_do = u[index];
+
+        double cc = sqrt(ggg * s_do.y / s_do.x);
+        double T0 = p_H / (ggg - 1.0) / 1.0;
+
+        double pp = pp2 - s_do.x * cc * (uu2 - 1.0);
+        double rho = pp / (ggg - 1.0) / T0;
+        s2[index].x = rho;
+
+        s2[index].y = p_H;
+        u2[index].x = 1.0;
+        u2[index].y = 0.0;
+    }
+}
+
+
 __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T, double* T_do, double* TT, int method, int step)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;   // Глобальный индекс текущей ячейки (текущего потока)
@@ -1934,6 +1964,11 @@ __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T
         return;
     }
 
+    //if (n == 0) // Если отдельно ввели неотражающие граничные условия   || n == N - 1
+    //{
+    //    return;
+    //}
+
 
 
     if (n == N - 1)
@@ -1941,15 +1976,25 @@ __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T
         s_2 = s_1;
         u_2 = u_1;
 
+        // Периодичные условия
+        //s_2 = s[(m)*N + 0];
+        //u_2 = u[(m)*N + 0];
+
+
+
+
 
         // Неотражающие граничные условия по Погорелову
-        double cc = sqrt(ggg * s_2.y / s_2.x);
+       /* double cc = sqrt(ggg * s_2.y / s_2.x);
         double cg = (ggg - 1.0) / (ggg + 1.0) * (u_2.x + 2.0 / (ggg - 1.0) * cc);
         u_2.x = cg;
         s_2.x = s_2.x * pow(cg/cc, 2.0/(ggg - 1.0));
-        s_2.y = s_2.x * cg * cg / ggg;
+        s_2.y = s_2.x * cg * cg / ggg;*/
+
+
 
         //s_2.y = 7.0;        // Давление на правой границе (пониженное)
+
 
 
         //if ((u_2.x < 0.0))
@@ -1969,10 +2014,15 @@ __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T
         s_4 = { 1.0, p_H };
         u_4 = { 1.0, 0.0 };
 
-        //if (y < 0.5 && *TT < 3.0 && method != 0)
-        //{
-        //    s_4.x = s_4.x * (1.0 + 0.01 * sin(*TT * pi * 2.0));   // Специальные возмущения плотности
-        //}
+        // Периодичные условия
+        /*s_4 = s[(m)*N + N - 1];
+        u_4 = u[(m)*N + N - 1];*/
+
+
+        if (y < 0.5 && *TT < 3.0 && method != 0)
+        {
+            s_4.x = s_4.x * (1.0 + 0.01 * sin(*TT * pi * 2.0));   // Специальные возмущения плотности
+        }
     }
     else
     {
@@ -2004,99 +2054,129 @@ __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T
         u_3 = u[(m - 1) * N + (n)];
     }
 
-
-    if (method == 0)
+    if (x + dx / 2.0 > 10.000001 && x + dx / 2.0 < 40.000001)
+    {
+        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
+    }
+    else
     {
         tmin = my_min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    }
+
+
+    if (x > 10.000001 && x < 40.000001)
+    {
+        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));
+    }
+    else
+    {
         tmin = my_min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
-        tmin = my_min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
         tmin = my_min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
     }
-    else if (method == 1)
+
+    if (x - dx / 2.0 > 10.000001 && x - dx / 2.0 < 40.000001)
     {
-        /*tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
-        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+        tmin = my_min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    }
+    else
+    {
         tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
-        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));*/
-
-        if (x + dx / 2.0 < hx)
-        {
-            //tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, true));
-        }
-        else
-        {
-            //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
-        }
-        if (y - dy / 2.0 < hy)
-        {
-            //tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, true));
-        }
-        else
-        {
-            //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
-        }
-        if (x - dx / 2.0 < hx)
-        {
-            //tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, true));
-        }
-        else
-        {
-            //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
-        }
-        if (y + dy / 2.0 < hy)
-        {
-            //tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, true));
-        }
-        else
-        {
-            //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
-            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));
-        }
-
     }
-    else if (method == 2)
-    {
-        if (x + dx / 2.0 < hx)
-        {
-            tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
-        }
-        if (y - dy / 2.0 < hy)
-        {
-            tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
-        }
-        if (x - dx / 2.0 < hx)
-        {
-            tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
-        }
-        if (y + dy / 2.0 < hy)
-        {
-            tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
-        }
 
-    }
+
+    //if (method == 0)
+    //{
+    //    tmin = my_min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    //    tmin = my_min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+    //    tmin = my_min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    //    tmin = my_min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+    //}
+    //else if (method == 1)
+    //{
+    //    /*tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
+    //    tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+    //    tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
+    //    tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));*/
+
+    //    if (x + dx / 2.0 < hx)
+    //    {
+    //        //tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, true));
+    //    }
+    //    else
+    //    {
+    //        //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
+    //    }
+    //    if (y - dy / 2.0 < hy)
+    //    {
+    //        //tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, true));
+    //    }
+    //    else
+    //    {
+    //        //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+    //    }
+    //    if (x - dx / 2.0 < hx)
+    //    {
+    //        //tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, true));
+    //    }
+    //    else
+    //    {
+    //        //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
+    //    }
+    //    if (y + dy / 2.0 < hy)
+    //    {
+    //        //tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, true));
+    //    }
+    //    else
+    //    {
+    //        //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+    //        tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));
+    //    }
+
+    //}
+    //else if (method == 2)
+    //{
+    //    if (x + dx / 2.0 < hx)
+    //    {
+    //        tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    //    }
+    //    else
+    //    {
+    //        tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+    //    }
+    //    if (y - dy / 2.0 < hy)
+    //    {
+    //        tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+    //    }
+    //    else
+    //    {
+    //        tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+    //    }
+    //    if (x - dx / 2.0 < hx)
+    //    {
+    //        tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    //    }
+    //    else
+    //    {
+    //        tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+    //    }
+    //    if (y + dy / 2.0 < hy)
+    //    {
+    //        tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+    //    }
+    //    else
+    //    {
+    //        tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+    //    }
+
+    //}
 
 
     if (*T > tmin)
@@ -2133,16 +2213,16 @@ __global__ void add2(double2* s, double2* u, double2* s2, double2* u2, double* T
     Q3 = 0.0;
 
 
-    if (x > 15.0)
+    if (x > 20.000001 && x < 30.000001)
     {
         if (y >= 0.5)
         {
-            Q2 = -4.0 * s_1.x;
+            Q2 = -2.5 * s_1.x;
             //Q2 = -60.0 * s_1.x * 2.0 * (y - 0.5);
         }
         else
         {
-            Q2 = 4.0 * s_1.x;
+            Q2 = 2.5 * s_1.x;
             //Q2 = 60.0 * s_1.x * 2.0 * (0.5 - y);
         }
         //Q2 = -s_1.x * 13.0 * atan(50.0 * (y - 0.5));
@@ -2430,7 +2510,7 @@ __global__ void add_MK(double2* s, double2* u, double2* s2, double2* u2, double*
 
 }
 
-__global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, double* T, double* T_do, int method)
+__global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, double* T, double* T_do, double* TT, int method)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;   // Глобальный индекс текущей ячейки (текущего потока)
     int n = index % N;                                   // номер ячейки по x (от 0)
@@ -2443,7 +2523,6 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
     //double x = x_min + n * (x_max - x_min) / (N - 1);
     double x = x_min + n * dx;
     double dist = __dsqrt_rn(x * x + y * y);
-    double Q2, Q3;
 
     double2 s_1, s_2, s_3, s_4, s_5, u_1, u_2, u_3, u_4, u_5;      // Переменные всех соседей и самой ячейки
     double2 Ps12 = { 0,0 }, Pu12 = { 0,0 }, Ps13 = { 0,0 }, Pu13 = { 0,0 }, //
@@ -2459,7 +2538,7 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
 
     //if ((n == N - 1) || (dist < In_) || (dist2 < In2_)) // Жёсткие граничные условия
 
-   if ((n <= 2)) // Жёсткие граничные условия
+   if (false)//((n <= 2)) // Жёсткие граничные условия
     {
         // В этих ячейках значения параметров зафиксированы и не меняются с течением времени)
         s2[index] = s_1;
@@ -2471,10 +2550,10 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
     {
         s_2 = s_1;
         u_2 = u_1;
-        if ((u_2.x < 0.0))
-        {
-            u_2.x = 0.01;              // Условие отсоса жидкости
-        }
+        //if ((u_2.x < 0.0))
+        //{
+        //    u_2.x = 0.01;              // Условие отсоса жидкости
+        //}
     }
     else
     {
@@ -2497,14 +2576,22 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
 
     if ((n == 0))
     {
-        s_4.x = s_1.x;
-        s_4.y = s_1.y;
-        u_4 = u_1;
+        s_4 = { 1.0, p_H };
+        u_4 = { 1.0, 0.0 };
+
+        //if (y < 0.5 && *TT < 3.0 && method != 0)
+        //{
+        //    s_4.x = s_4.x * (1.0 + 0.03 * sin(*TT * pi * 2.0));   // Специальные возмущения плотности
+        //}
+
+        //s_4.x = s_1.x;
+        //s_4.y = s_1.y;
+        //u_4 = u_1;
         //u_4.x = -2.2;
-        if ((u_4.x > -0.1))
-        {
-            u_4.x = -0.1;              // Условие отсоса жидкости
-        }
+        //if ((u_4.x > -0.1))
+        //{
+        //    u_4.x = -0.1;              // Условие отсоса жидкости
+        //}
 
         //double Max = sqrt((u_1.x * u_1.x + u_1.y * u_1.y) / (ggg * s_1.y / s_1.x));
         //if ( (u_1.x > -5.0)&&(Max < 1) )
@@ -2517,6 +2604,7 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         s_4 = s[(m)*N + n - 1];
         u_4 = u[(m)*N + n - 1];
     }
+
 
     if ((m == 0))
     {
@@ -2559,22 +2647,16 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         u21 = u[(m)*N + (n + 2)];
     }
 
-    if (n == 0)
+    if (n <= 1)
     {
-        s41 = s_4;
-        u41 = u_4;
-    }
-    else if (n == 1)
-    {
-        s41 = s_4;
-        u41 = u_4;
+        s41 = { 1.0, p_H };
+        u41 = { 1.0, 0.0 };
     }
     else
     {
         s41 = s[(m)*N + (n - 2)];
         u41 = u[(m)*N + (n - 2)];
     }
-
 
     if (m == M - 2)
     {
@@ -2587,6 +2669,7 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         s51 = s_3;
         u51.x = u_3.x;
         u51.y = -u_3.y;
+
     }
     else
     {
@@ -2606,6 +2689,7 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         s31 = s_5;
         u31.x = u_5.x;
         u31.y = -u_5.y;
+
     }
     else
     {
@@ -2613,169 +2697,316 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         u31 = u[(m - 2)*N + (n)];
     }
 
-    linear2(x - dx, s_4.x,      x, s_1.x,   x + dx, s_2.x,  x - dx/2.0, x + dx/2.0,     A, B);
-    if (B <= 0)
-    {
-        s12.x = s_1.x;
-    }
-    else
-    {
-        s12.x = B;
-    }
-    if (A <= 0)
-    {
-        s14.x = s_1.x;
-    }
-    else
-    {
-        s14.x = A;
-    }
-    linear2(x - dx, s_4.y,       x, s_1.y,    x + dx, s_2.y,  x - dx / 2.0, x + dx / 2.0,    A, B);
-    if ((B <= 0) || (grad_p == false) )
-    {
-        s12.y = s_1.y;
-    }
-    else
-    {
-        s12.y = B;
-    }
-    if ( (A <= 0) || (grad_p == false) )
-    {
-        s14.y = s_1.y;
-    }
-    else
-    {
-        s14.y = A;
-    }
-    linear2(x - dx, u_4.x,      x, u_1.x,   x + dx, u_2.x,       x - dx / 2.0, x + dx / 2.0,     A, B);
-    u12.x = B;
-    u14.x = A;
-    linear2(x - dx, u_4.y,       x, u_1.y,   x + dx, u_2.y,     x - dx / 2.0, x + dx / 2.0,      A, B);
-    u12.y = B;
-    u14.y = A;
 
-    linear2(y - dy, s_3.x,      y, s_1.x,       y + dy, s_5.x,      y - dy / 2.0, y + dy / 2.0,     A, B);
-    if (B <= 0)
+    if (true)//(x > 10.0 && x < 40.0)
     {
-        s15.x = s_1.x;
-    }
-    else
-    {
-        s15.x = B;
-    }
-    if (A <= 0)
-    {
-        s13.x = s_1.x;
-    }
-    else
-    {
-        s13.x = A;
-    }
-    linear2(y - dy, s_3.y,      y, s_1.y,       y + dy, s_5.y,      y - dy / 2.0, y + dy / 2.0,         A, B);
-    if ((B <= 0) || (grad_p == false) )
-    {
-        s15.y = s_1.y;
-    }
-    else
-    {
-        s15.y = B;
-    }
-    if ( (A <= 0) || (grad_p == false) )
-    {
-        s13.y = s_1.y;
-    }
-    else
-    {
-        s13.y = A;
-    }
-    linear2(y - dy, u_3.x,      y, u_1.x,       y + dy, u_5.x,       y - dy / 2.0, y + dy / 2.0,        A, B);
-    u15.x = B;
-    u13.x = A;
-    linear2(y - dy, u_3.y,       y, u_1.y,      y + dy, u_5.y,      y - dy / 2.0, y + dy / 2.0,         A, B);
-    u15.y = B;
-    u13.y = A;
 
-    s21.x = linear(x, s_1.x,     x + dx, s_2.x,      x + 2.0 * dx, s21.x,       x + dx / 2.0);
-    if (s21.x <= 0) s21.x = s_2.x;
-    s21.y = linear(x, s_1.y,      x + dx, s_2.y,    x + 2.0 * dx, s21.y,    x + dx / 2.0);
-    if ( (s21.y <= 0) || (grad_p == false) ) s21.y = s_2.y;
-    u21.x = linear(x, u_1.x,    x + dx, u_2.x,      x + 2.0 * dx, u21.x,    x + dx / 2.0);
-    u21.y = linear(x, u_1.y,    x + dx, u_2.y,      x + 2.0 * dx, u21.y,    x + dx / 2.0);
+        linear2(x - dx, s_4.x, x, s_1.x, x + dx, s_2.x, x - dx / 2.0, x + dx / 2.0, A, B);
 
-    s41.x = linear(x, s_1.x,    x - dx, s_4.x,      x - 2.0 * dx, s41.x,        x - dx / 2.0);
-    if (s41.x <= 0) s41.x = s_4.x;
-    s41.y = linear(x, s_1.y,    x - dx, s_4.y,      x - 2.0 * dx, s41.y,         x - dx / 2.0);
-    if ((s41.y <= 0) || (grad_p == false) ) s41.y = s_4.y;
-    u41.x = linear(x, u_1.x,    x - dx, u_4.x,      x - 2.0 * dx, u41.x,        x - dx / 2.0);
-    u41.y = linear(x, u_1.y,    x - dx, u_4.y,      x - 2.0 * dx, u41.y,         x - dx / 2.0);
-
-    s31.x = linear(y, s_1.x,        y - dy, s_3.x,      y - 2.0 * dy, s31.x,        y - dy / 2.0);
-    if (s31.x <= 0) s31.x = s_3.x;
-    s31.y = linear(y, s_1.y,        y - dy, s_3.y,      y - 2.0 * dy, s31.y,        y - dy / 2.0);
-    if ( (s31.y <= 0) || (grad_p == false) ) s31.y = s_3.y;
-    u31.x = linear(y, u_1.x,        y - dy, u_3.x,      y - 2.0 * dy, u31.x,        y - dy / 2.0);
-    u31.y = linear(y, u_1.y,        y - dy, u_3.y,      y - 2.0 * dy, u31.y,        y - dy / 2.0);
-
-    s51.x = linear(y, s_1.x,        y + dy, s_5.x,      y + 2.0 * dy, s51.x,        y + dy / 2.0);
-    if (s51.x <= 0) s51.x = s_5.x;
-    s51.y = linear(y, s_1.y,        y + dy, s_5.y,      y + 2.0 * dy, s51.y,        y + dy / 2.0);
-    if ( (s51.y <= 0)||(grad_p == false) ) s51.y = s_5.y;
-    u51.x = linear(y, u_1.x,        y + dy, u_5.x,      y + 2.0 * dy, u51.x,        y + dy / 2.0);
-    u51.y = linear(y, u_1.y,        y + dy, u_5.y,      y + 2.0 * dy, u51.y,        y + dy / 2.0);
+        if (B <= 0)
+        {
+            s12.x = s_1.x;
+        }
+        else
+        {
+            s12.x = B;
+        }
+        if (A <= 0)
+        {
+            s14.x = s_1.x;
+        }
+        else
+        {
+            s14.x = A;
+        }
 
 
-    if (method == 0)
-    {
-        tmin = min(tmin, HLL(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dy));
-        tmin = min(tmin, HLL(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dx));
-        tmin = min(tmin, HLL(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dy));
-        tmin = min(tmin, HLL(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dx));
-    }
-    else if (method == 1)
-    {
-        tmin = min(tmin, HLLC_2d_Korolkov(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dx, false));
-        tmin = min(tmin, HLLC_2d_Korolkov(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dy, false));
-        tmin = min(tmin, HLLC_2d_Korolkov(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dx, false));
-        tmin = min(tmin, HLLC_2d_Korolkov(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dy, false));
-    }
-    else if (method == 2)
-    {
-        if (x + dx / 2.0 < hx)
+
+
+
+        linear2(x - dx, s_4.y, x, s_1.y, x + dx, s_2.y, x - dx / 2.0, x + dx / 2.0, A, B);
+        if ((B <= 0) || (grad_p == false))
+        {
+            s12.y = s_1.y;
+        }
+        else
+        {
+            s12.y = B;
+        }
+        if ((A <= 0) || (grad_p == false))
+        {
+            s14.y = s_1.y;
+        }
+        else
+        {
+            s14.y = A;
+        }
+
+        linear2(x - dx, u_4.x, x, u_1.x, x + dx, u_2.x, x - dx / 2.0, x + dx / 2.0, A, B);
+        u12.x = B;
+        u14.x = A;
+        linear2(x - dx, u_4.y, x, u_1.y, x + dx, u_2.y, x - dx / 2.0, x + dx / 2.0, A, B);
+        u12.y = B;
+        u14.y = A;
+
+        linear2(y - dy, s_3.x, y, s_1.x, y + dy, s_5.x, y - dy / 2.0, y + dy / 2.0, A, B);
+
+        if (B <= 0)
+        {
+            s15.x = s_1.x;
+        }
+        else
+        {
+            s15.x = B;
+        }
+        if (A <= 0)
+        {
+            s13.x = s_1.x;
+        }
+        else
+        {
+            s13.x = A;
+        }
+
+
+        linear2(y - dy, s_3.y, y, s_1.y, y + dy, s_5.y, y - dy / 2.0, y + dy / 2.0, A, B);
+        if ((B <= 0) || (grad_p == false))
+        {
+            s15.y = s_1.y;
+        }
+        else
+        {
+            s15.y = B;
+        }
+        if ((A <= 0) || (grad_p == false))
+        {
+            s13.y = s_1.y;
+        }
+        else
+        {
+            s13.y = A;
+        }
+
+
+        linear2(y - dy, u_3.x, y, u_1.x, y + dy, u_5.x, y - dy / 2.0, y + dy / 2.0, A, B);
+        u15.x = B;
+        u13.x = A;
+        linear2(y - dy, u_3.y, y, u_1.y, y + dy, u_5.y, y - dy / 2.0, y + dy / 2.0, A, B);
+        u15.y = B;
+        u13.y = A;
+
+
+        if (x + dx / 2.0 > 10.000001 && x + dx / 2.0 < 40.000001)
+        {
+            s21.x = linear(x, s_1.x, x + dx, s_2.x, x + 2.0 * dx, s21.x, x + dx / 2.0);
+            if (s21.x <= 0) s21.x = s_2.x;
+            s21.y = linear(x, s_1.y, x + dx, s_2.y, x + 2.0 * dx, s21.y, x + dx / 2.0);
+            if ((s21.y <= 0) || (grad_p == false)) s21.y = s_2.y;
+            u21.x = linear(x, u_1.x, x + dx, u_2.x, x + 2.0 * dx, u21.x, x + dx / 2.0);
+            u21.y = linear(x, u_1.y, x + dx, u_2.y, x + 2.0 * dx, u21.y, x + dx / 2.0);
+
+            tmin = min(tmin, HLLC_2d_Korolkov(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dx, false));
+        }
+        else
+        {
+            tmin = my_min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+        }
+
+
+        if (x > 10.000001 && x < 40.000001)
+        {
+            s31.x = linear(y, s_1.x, y - dy, s_3.x, y - 2.0 * dy, s31.x, y - dy / 2.0);
+            if (s31.x <= 0) s31.x = s_3.x;
+            s31.y = linear(y, s_1.y, y - dy, s_3.y, y - 2.0 * dy, s31.y, y - dy / 2.0);
+            if ((s31.y <= 0) || (grad_p == false)) s31.y = s_3.y;
+            u31.x = linear(y, u_1.x, y - dy, u_3.x, y - 2.0 * dy, u31.x, y - dy / 2.0);
+            u31.y = linear(y, u_1.y, y - dy, u_3.y, y - 2.0 * dy, u31.y, y - dy / 2.0);
+
+            s51.x = linear(y, s_1.x, y + dy, s_5.x, y + 2.0 * dy, s51.x, y + dy / 2.0);
+            if (s51.x <= 0) s51.x = s_5.x;
+            s51.y = linear(y, s_1.y, y + dy, s_5.y, y + 2.0 * dy, s51.y, y + dy / 2.0);
+            if ((s51.y <= 0) || (grad_p == false)) s51.y = s_5.y;
+            u51.x = linear(y, u_1.x, y + dy, u_5.x, y + 2.0 * dy, u51.x, y + dy / 2.0);
+            u51.y = linear(y, u_1.y, y + dy, u_5.y, y + 2.0 * dy, u51.y, y + dy / 2.0);
+
+
+            tmin = min(tmin, HLLC_2d_Korolkov(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dy, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dy, false));
+        }
+        else
+        {
+            tmin = my_min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+            tmin = my_min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+        }
+
+
+        if (x - dx / 2.0 > 10.000001 && x - dx / 2.0 < 40.000001)
+        {
+            s41.x = linear(x, s_1.x, x - dx, s_4.x, x - 2.0 * dx, s41.x, x - dx / 2.0);
+            if (s41.x <= 0) s41.x = s_4.x;
+            s41.y = linear(x, s_1.y, x - dx, s_4.y, x - 2.0 * dx, s41.y, x - dx / 2.0);
+            if ((s41.y <= 0) || (grad_p == false)) s41.y = s_4.y;
+            u41.x = linear(x, u_1.x, x - dx, u_4.x, x - 2.0 * dx, u41.x, x - dx / 2.0);
+            u41.y = linear(x, u_1.y, x - dx, u_4.y, x - 2.0 * dx, u41.y, x - dx / 2.0);
+
+            tmin = min(tmin, HLLC_2d_Korolkov(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dx, false));
+        }
+        else
+        {
+            tmin = my_min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+        }
+
+
+        /*if (method == 0)
         {
             tmin = min(tmin, HLL(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dy));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dy));
-        }
-        if (y - dy / 2.0 < hy)
-        {
             tmin = min(tmin, HLL(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dx));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dx));
-        }
-        if (x - dx / 2.0 < hx)
-        {
             tmin = min(tmin, HLL(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dy));
-        }
-        else
-        {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dy));
-        }
-        if (y + dy / 2.0 < hy)
-        {
             tmin = min(tmin, HLL(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dx));
         }
+        else if (method == 1)
+        {
+            tmin = min(tmin, HLLC_2d_Korolkov(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dx, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dy, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dx, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dy, false));
+        }
+        else if (method == 2)
+        {
+            if (x + dx / 2.0 < hx)
+            {
+                tmin = min(tmin, HLL(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dy));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s12, u12, s21, u21, 1, 0, Ps12, Pu12, dy));
+            }
+            if (y - dy / 2.0 < hy)
+            {
+                tmin = min(tmin, HLL(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dx));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s13, u13, s31, u31, 0, -1, Ps13, Pu13, dx));
+            }
+            if (x - dx / 2.0 < hx)
+            {
+                tmin = min(tmin, HLL(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dy));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s14, u14, s41, u41, -1, 0, Ps14, Pu14, dy));
+            }
+            if (y + dy / 2.0 < hy)
+            {
+                tmin = min(tmin, HLL(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dx));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dx));
+            }
+        }
         else
         {
-            tmin = min(tmin, Godunov_Solver_Alexashov(s15, u15, s51, u51, 0, 1, Ps15, Pu15, dx));
-        }
+            printf("Error in method 2375\n");
+        }*/
     }
     else
     {
-        printf("Error in method 2375\n");
+        if (true)//(method == 0)
+        {
+            tmin = my_min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+            tmin = my_min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+            tmin = my_min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+            tmin = my_min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+        }
+        else if (method == 1)
+        {
+            /*tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
+            tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));*/
+
+            if (x + dx / 2.0 < hx)
+            {
+                //tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, true));
+            }
+            else
+            {
+                //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx, false));
+            }
+            if (y - dy / 2.0 < hy)
+            {
+                //tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, true));
+            }
+            else
+            {
+                //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy, false));
+            }
+            if (x - dx / 2.0 < hx)
+            {
+                //tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, true));
+            }
+            else
+            {
+                //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx, false));
+            }
+            if (y + dy / 2.0 < hy)
+            {
+                //tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, true));
+            }
+            else
+            {
+                //tmin = min(tmin, HLLC_Aleksashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+                tmin = min(tmin, HLLC_2d_Korolkov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy, false));
+            }
+
+        }
+        else if (method == 2)
+        {
+            if (x + dx / 2.0 < hx)
+            {
+                tmin = min(tmin, HLL(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_2, u_2, 1, 0, Ps12, Pu12, dx));
+            }
+            if (y - dy / 2.0 < hy)
+            {
+                tmin = min(tmin, HLL(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_3, u_3, 0, -1, Ps13, Pu13, dy));
+            }
+            if (x - dx / 2.0 < hx)
+            {
+                tmin = min(tmin, HLL(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_4, u_4, -1, 0, Ps14, Pu14, dx));
+            }
+            if (y + dy / 2.0 < hy)
+            {
+                tmin = min(tmin, HLL(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+            }
+            else
+            {
+                tmin = min(tmin, Godunov_Solver_Alexashov(s_1, u_1, s_5, u_5, 0, 1, Ps15, Pu15, dy));
+            }
+
+        }
+
+
     }
 
 
@@ -2800,24 +3031,29 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
 
     double dV = dx * dy;
 
-    if (x <= -1.0)
+    double Q2x = 0.0;
+    double Q2 = 0.0;
+    double Q3 = 0.0;
+
+
+    if (x > 20.000001 && x < 30.000001)
     {
-        Q2 = 0.0;
-        Q3 = 0.0;
-    }
-    else
-    {
-        if (y >= 1.0)
+        if (y >= 0.5)
         {
-            Q2 = -s_1.x * 1.5;
-            Q3 = Q2 * u_1.y;
+            Q2 = -4.0 * s_1.x;
+            //Q2 = -60.0 * s_1.x * 2.0 * (y - 0.5);
         }
         else
         {
-            Q2 = s_1.x * 1.5;
-            Q3 = Q2 * u_1.y;
+            Q2 = 4.0 * s_1.x;
+            //Q2 = 60.0 * s_1.x * 2.0 * (0.5 - y);
         }
+
+        //Q2 = -s_1.x * 5.0 * atan(20.0 * (y - 0.5))/1.48;
+        //Q2 = 10.0 * s_1.x * 2.0 * (0.5 - y);
     }
+
+    Q3 = Q2x * u_1.x + Q2 * u_1.y;
 
     // Декартовый блок
     s2[index].x = s_1.x - (*T_do / dV) * PS.x;
@@ -2827,7 +3063,7 @@ __global__ void Kernel_TVD(double2* s, double2* u, double2* s2, double2* u2, dou
         s2[index].x = s_1.x;
     }
 
-    u2[index].x = (s_1.x * u_1.x - (*T_do / dV) * PU.x) / s2[index].x;
+    u2[index].x = (s_1.x * u_1.x - (*T_do / dV) * PU.x + *T_do * Q2x) / s2[index].x;
     u2[index].y = (s_1.x * u_1.y - (*T_do / dV) * PU.y + *T_do * Q2) / s2[index].x;
     s2[index].y = (((s_1.y / (ggg - 1) + s_1.x * (u_1.x * u_1.x + u_1.y * u_1.y) * 0.5) - (*T_do / dV) * PS.y + *T_do * Q3) - //
         0.5 * s2[index].x * (u2[index].x * u2[index].x + u2[index].y * u2[index].y)) * (ggg - 1);
@@ -2876,7 +3112,7 @@ void print_file_mini(double2* host_s_p, double2* host_u_p, double* nn1, double3*
     fout.open(name);
     int nn = (int)((N + Nmin - 1) / Nmin);
     int mm = (int)((M + Nmin - 1) / Nmin);
-    fout << "TITLE = \"HP\"  VARIABLES = \"X\", \"Y\", \"Ro\", \"P\", \"Vx\", \"Vy\", \"Mach\", ZONE T = \"HP\", SOLUTIONTIME = " << soltime << ", N = " << nn * mm //
+    fout << "TITLE = \"HP\"  VARIABLES = \"X\", \"Y\", \"Ro\", \"P\", \"Vx\", \"Vy\", \"Mach\", \"omega\", ZONE T = \"HP\", SOLUTIONTIME = " << soltime << ", N = " << nn * mm //
         << " , E = " << (nn - 1) * (mm - 1) << ", F = FEPOINT, ET = quadrilateral" << endl;
     //double ss = (sqv_1 * pi * kv(y_max) + sqv_2 * 2.0 * pi * y_max *  (x_max - x_min + dx));
     for (int k = 0; k < K; k++)
@@ -2904,14 +3140,24 @@ void print_file_mini(double2* host_s_p, double2* host_u_p, double* nn1, double3*
             n3 = (2.0 / 3.0) * (nn3[k] / nn1[k] - kvv(v1, v2, v3));
         }
 
+        int k2 = (m)*N + (n + 1);
+        int k3 = (m - 1) * N + (n);
+        int k4 = (m)*N + (n - 1);
+        int k5 = (m + 1) * N + (n);
+
+        double dvx = 0.0;
+        double dvy = 0.0;
+
+        if(k3 >= 0 && k3 < K && k5 >= 0 && k5 < K) dvx = (host_u_p[k5].x - host_u_p[k3].x) / (2.0 * dy);
+        if (k2 >= 0 && k2 < K && k4 >= 0 && k4 < K)  dvy = (host_u_p[k2].y - host_u_p[k4].y) / (2.0 * dx);
         
         if (host_s_p[k].x > 0.0)
         {
             Max = sqrt((host_u_p[k].x * host_u_p[k].x + host_u_p[k].y * host_u_p[k].y) / (ggg * host_s_p[k].y / host_s_p[k].x));
         }
-        fout << x - 15.0 << " " << y << " " << host_s_p[k].x << " " << host_s_p[k].y <<//
+        fout << x << " " << y << " " << host_s_p[k].x << " " << host_s_p[k].y <<//
             " " << host_u_p[k].x << " " << host_u_p[k].y << " " << //
-            Max  << endl;
+            Max  << " " << (dvy - dvx)/2.0 << endl;
     }
 
     for (int k = 0; k < nn * mm; k = k + 1)
@@ -3015,6 +3261,7 @@ int main(void)
     double* host_T, * host_T_do, * host_TT, *host_list, * dev_list;
     double* T, * T_do, * TT;
     double * host_Watch, *dev_Watch, * dev_Watch2, *host_Watch2;
+    double *dev_Watch3, *host_Watch3;
     int size = K * sizeof(double2);
     double* nn1, * nn3;
     double3* nn2;
@@ -3048,6 +3295,7 @@ int main(void)
 
     cudaMalloc((void**)&dev_Watch, sizeof(double));
     cudaMalloc((void**)&dev_Watch2, sizeof(double));
+    cudaMalloc((void**)&dev_Watch3, sizeof(double));
 
 
     host_list = (double*)malloc(list_size * sizeof(double));
@@ -3067,6 +3315,7 @@ int main(void)
     host_i = (int*)malloc(sizeof(int));
     host_Watch = (double*)malloc(sizeof(double));
     host_Watch2 = (double*)malloc(sizeof(double));
+    host_Watch3 = (double*)malloc(sizeof(double));
 
     
     *host_T = 10000000;
@@ -3131,11 +3380,11 @@ int main(void)
     }
 
 
-    if (true)
+    if (false) // TXT файл
     {
         double c1, c2, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14;
         ifstream fin; 
-        fin.open("B01.txt");  // 6Instable_HLLC_17_2_0.3_0.3_1792_1536_9_3_10.txt
+        fin.open("B19.txt");  // 6Instable_HLLC_17_2_0.3_0.3_1792_1536_9_3_10.txt
 
         for (int k = 0; k < K; k++)
         {
@@ -3160,6 +3409,30 @@ int main(void)
             np3[k] = a14;*/
         }
         fin.close();
+    }
+
+    if (false) // BIN файл
+    {
+        double c1, c2, a1, a2, a3, a4;
+        ifstream fin("B19.bin", ios::binary | ios::in);
+        for (int k = 0; k < K; k++)
+        {
+
+            fin.read((char*)&c1, sizeof(c1));
+            fin.read((char*)&c2, sizeof(c2));
+            fin.read((char*)&a1, sizeof(a1));
+            fin.read((char*)&a2, sizeof(a2));
+            fin.read((char*)&a3, sizeof(a3));
+            fin.read((char*)&a4, sizeof(a4));
+            host_s[k].x = a1;
+            host_s[k].y = a2;
+            host_u[k].x = a3;
+            host_u[k].y = a4;
+            host_s2[k].x = a1;
+            host_s2[k].y = a2;
+            host_u2[k].x = a3;
+            host_u2[k].y = a4;
+        }
     }
 
     
@@ -3202,6 +3475,8 @@ int main(void)
     }*/
 
     std::cout << "START" << endl;
+
+    string name_all = "B31";
 
 
     for (int i = 0; i < 0; i = i + 2)  // Сколько шагов по времени делаем?
@@ -3269,13 +3544,25 @@ int main(void)
     *host_TT = 0.0;
     cudaMemcpy(TT, host_TT, sizeof(double), cudaMemcpyHostToDevice);
 
-    for (int i = 0; i < 500000; i = i + 2)  // Сколько шагов по времени делаем?
+    ofstream foutm1;
+    foutm1.open("1_inStable_" + name_all + ".txt");
+
+    ofstream foutm2;
+    foutm2.open("2_inStable_" + name_all + ".txt");
+    
+    ofstream foutm3;
+    foutm3.open("3_inStable_" + name_all + ".txt");
+
+
+    for (int i = 0; i < 0; i = i + 2)  // Сколько шагов по времени делаем?
     {
         if (i == 0)
         {
             cout << "HLLC" << endl;
         }
+
         add2 << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, TT, 1, i);
+        //add2_bound << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, TT, 1, i);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "1  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -3300,6 +3587,7 @@ int main(void)
         }
 
         add2 << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, TT, 1, i);
+        //add2_bound << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, TT, 1, i);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) { fprintf(stderr, "3  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));   exit(-1); }
         cudaStatus = cudaDeviceSynchronize();
@@ -3327,7 +3615,19 @@ int main(void)
             cudaEventRecord(start, 0);
         }
 
-        if (i % 20000 == 0)
+        if (i % 100 == 0 && i > 2)
+        {
+            funk_my << <1, 1 >> > (s, dev_Watch, dev_Watch2, dev_Watch3);
+            cudaMemcpy(host_Watch, dev_Watch, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_Watch2, dev_Watch2, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_Watch3, dev_Watch3, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
+            foutm1 << *host_TT << " " << *host_Watch << endl;
+            foutm2 << *host_TT << " " << *host_Watch2 << endl;
+            foutm3 << *host_TT << " " << *host_Watch3 << endl;
+        }
+
+        if (i % 50000 == 0)
         {
             double lll1;
             cudaEventRecord(stop, 0);
@@ -3338,7 +3638,7 @@ int main(void)
             cudaMemcpy(host_s, s, size, cudaMemcpyDeviceToHost);
             cudaMemcpy(host_u, u, size, cudaMemcpyDeviceToHost);
             cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
-            string name = "video_B03_" + to_string(i) + ".txt";
+            string name = "video" + name_all + "_" + to_string(i) + ".txt";
             lll1 = *host_TT;
             print_file_mini(host_s, host_u, nn1, nn2, nn3, name, lll1);
         }
@@ -3489,7 +3789,7 @@ int main(void)
     print_file_mini(host_s, host_u, nn1, nn2, nn3, np1, np2, np3, name);
     Save_file(host_s, host_u, nn1, nn2, nn3, np1, np2, np3, name2);*/
 
- 
+    
 
 
     ofstream fout6;
@@ -3510,7 +3810,7 @@ int main(void)
         {
             cout << "HLL + TVD" << endl;
         }
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, 0);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, TT, 0);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "1  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -3534,7 +3834,7 @@ int main(void)
             exit(-1);
         }
 
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, 0);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, TT, 0);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) { fprintf(stderr, "3  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));   exit(-1); }
         cudaStatus = cudaDeviceSynchronize();
@@ -3565,13 +3865,13 @@ int main(void)
             print_file_mini(host_s, host_u, nn1, nn2, nn3, name);*/
         }
     }
-    for (int i = 0; i < 0; i = i + 2)  // Сколько шагов по времени делаем?
+    for (int i = 0; i < 300000000; i = i + 2)  // Сколько шагов по времени делаем?
     {
-        if (i % 5000 == 0)
+        if (i % 10000 == 0)
         {
             cout << "HLLC + TVD  " << i << endl;
         }
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, 1);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do,TT, 1);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "1  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -3582,22 +3882,10 @@ int main(void)
             fprintf(stderr, "1  cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
             exit(-1);
         }
+        
+        funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
 
-        if (i < 600000)
-        {
-            funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
-            //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, TT);
-        }
-        else
-        {
-            //funk_my << <1, 1 >> > (s2, dev_Watch, dev_Watch2, T);
-            funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
-            //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, TT);
-            //cudaMemcpy(host_Watch, dev_Watch, sizeof(double), cudaMemcpyDeviceToHost);
-            //cudaMemcpy(host_Watch2, dev_Watch2, sizeof(double), cudaMemcpyDeviceToHost);
-            //cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
-            //fout6 << *host_TT << " " << *host_Watch << endl;
-        }
+
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "2  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -3609,38 +3897,42 @@ int main(void)
             exit(-1);
         }
 
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, 1);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do,TT, 1);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) { fprintf(stderr, "3  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));   exit(-1); }
         cudaStatus = cudaDeviceSynchronize();
         if (cudaStatus != cudaSuccess) { fprintf(stderr, "3  cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus); exit(-1); }
 
-        if (i < 400000)
-        {
-            funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
-            //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, TT);
-        }
-        else
-        {
-            funk_my << <1, 1 >> > (s, dev_Watch, dev_Watch2, dev_list, T);
-            funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
-            //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, TT);
-            cudaMemcpy(host_list, dev_list, list_size * sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_Watch, dev_Watch, sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_Watch2, dev_Watch2, sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
-            if (i % 30 == 0)
-            {
-                fout6 << *host_TT << " " << *host_Watch << endl;
-                fout7 << *host_TT << " " << *host_Watch2 << endl;
-                for (int kl = 0; kl < list_size; kl++)
-                {
-                    int n = (list1_ + kl) % N;                                   // номер ячейки по x (от 0)
-                    double x = x_min + n * (x_max - x_min) / (N - 1);
-                    fout8 << *host_TT << " " <<  x  << " " << host_list[kl] << endl;
-                }
-            }
-        }
+        funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
+
+        //if (i < 2)
+        //{
+        //    funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
+        //    //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, TT);
+        //}
+        //else
+        //{
+        //    //funk_my << <1, 1 >> > (s, dev_Watch, dev_Watch2, dev_list, T);
+        //    funk_time << <1, 1 >> > (T, T_do, TT, dev_i);
+        //    //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, TT);
+        //    cudaMemcpy(host_list, dev_list, list_size * sizeof(double), cudaMemcpyDeviceToHost);
+        //    cudaMemcpy(host_Watch, dev_Watch, sizeof(double), cudaMemcpyDeviceToHost);
+        //    cudaMemcpy(host_Watch2, dev_Watch2, sizeof(double), cudaMemcpyDeviceToHost);
+        //    cudaMemcpy(host_Watch3, dev_Watch3, sizeof(double), cudaMemcpyDeviceToHost);
+        //    cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
+        //    if (i % 30 == 0)
+        //    {
+        //        fout6 << *host_TT << " " << *host_Watch << endl;
+        //        fout7 << *host_TT << " " << *host_Watch2 << endl;
+        //        fout7 << *host_TT << " " << *host_Watch3 << endl;
+        //        for (int kl = 0; kl < list_size; kl++)
+        //        {
+        //            int n = (list1_ + kl) % N;                                   // номер ячейки по x (от 0)
+        //            double x = x_min + n * (x_max - x_min) / (N - 1);
+        //            fout8 << *host_TT << " " <<  x  << " " << host_list[kl] << endl;
+        //        }
+        //    }
+        //}
 
         //instable << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, TT);
         cudaStatus = cudaGetLastError();
@@ -3654,7 +3946,36 @@ int main(void)
             exit(-1);
         }
 
-        if (i % 2400 == 0 && i >= 200000)
+
+        if (i % 200 == 0 && i > 2)
+        {
+            funk_my << <1, 1 >> > (s, dev_Watch, dev_Watch2, dev_Watch3);
+            cudaMemcpy(host_Watch, dev_Watch, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_Watch2, dev_Watch2, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_Watch3, dev_Watch3, sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
+            foutm1 << *host_TT << " " << *host_Watch << endl;
+            foutm2 << *host_TT << " " << *host_Watch2 << endl;
+            foutm3 << *host_TT << " " << *host_Watch3 << endl;
+        }
+
+        if (i % 50000 == 0)
+        {
+            double lll1;
+            cudaEventRecord(stop, 0);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&elapsedTime, start, stop);
+            printf("8000 step - Time:  %.2f sec\n", elapsedTime / 1000.0);
+            cudaEventRecord(start, 0);
+            cudaMemcpy(host_s, s, size, cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_u, u, size, cudaMemcpyDeviceToHost);
+            cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
+            string name = "video" + name_all + "_" + to_string(i) + ".txt";
+            lll1 = *host_TT;
+            print_file_mini(host_s, host_u, nn1, nn2, nn3, name, lll1);
+        }
+
+        /*if (i % 25000 == 0 && i >= 2)
         {
             cudaEventRecord(stop, 0);
             cudaEventSynchronize(stop);
@@ -3664,14 +3985,14 @@ int main(void)
             cudaMemcpy(host_s, s, size, cudaMemcpyDeviceToHost);
             cudaMemcpy(host_u, u, size, cudaMemcpyDeviceToHost);
             cudaMemcpy(host_TT, TT, sizeof(double), cudaMemcpyDeviceToHost);
-            string name = "M_2_chi_17_" + to_string(i) + ".txt";
+            string name = "video_B11_" + to_string(i) + ".txt";
             if (Time0 < 0.0)
             {
                 Time0 = *host_TT;
             }
             print_file_mini(host_s, host_u, nn1, nn2, nn3, name, *host_TT - Time0);
             cout << "Pechat = " << i << " step     " << *host_TT - Time0 << "  time" << endl;
-        }
+        }*/
     }
     for (int i = 0; i < 0; i = i + 2)  // Сколько шагов по времени делаем?
     {
@@ -3679,7 +4000,7 @@ int main(void)
         {
             cout << "Godunov + tvd" << endl;
         }
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, 2);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s, u, s2, u2, T, T_do, TT, 2);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "1  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -3703,7 +4024,7 @@ int main(void)
             exit(-1);
         }
         
-        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, 2);
+        Kernel_TVD << < K / THREADS_PER_BLOCK, THREADS_PER_BLOCK >> > (s2, u2, s, u, T, T_do, TT, 2);
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) { fprintf(stderr, "3  addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));   exit(-1); }
         cudaStatus = cudaDeviceSynchronize();
@@ -3744,6 +4065,10 @@ int main(void)
     //}
 
 
+    foutm1.close();
+    foutm2.close();
+    foutm3.close();
+
     // copy device result back to host copy of c
     if (device)
     {
@@ -3783,19 +4108,19 @@ int main(void)
     
     ofstream fout;
     //fout.open("000.txt");
-    fout.open("B03.txt");
+    fout.open(name_all + ".bin", ios::binary);
 
     ofstream fout2;
-    fout2.open("B03_param_for_texplot.txt");
+    fout2.open(name_all + "_param_for_texplot.txt");
 
     ofstream fout5;
-    fout5.open("B03_param_for_texplot_mini.txt");
+    fout5.open(name_all + "_param_for_texplot_mini.txt");
 
     ofstream fout3;
-    fout3.open("B03_param_y=0.txt");
+    fout3.open(name_all + "_param_y=0.txt");
 
     ofstream fout4;
-    fout4.open("B03_inform.txt");
+    fout4.open(name_all + "_inform.txt");
 
     fout2 << "TITLE = \"HP\"  VARIABLES = \"X\", \"Y\", \"Ro\", \"P\", \"Vx\", \"Vy\", \"Mach\", \"T\", ZONE T = \"HP\", N = " << K //
         << " , E = " << (N - 1) * (M - 1) << ", F = FEPOINT, ET = quadrilateral" << endl;
@@ -3810,36 +4135,17 @@ int main(void)
         int m = (k - n) / N;                             // номер ячейки по y (от 0)
         double y = y_min + m * (y_max) / (M);
         double x = x_min + n * (x_max - x_min) / (N - 1);
-        fout << x << " " << y << " " << host_s[k].x << " " << host_s[k].y <<//
-            " " << host_u[k].x << " " << host_u[k].y << endl;
-        //double Max = 0.0, Temp = 0.0;
-        //if (host_s[k].x > 0)
-        //{
-        //    Max = sqrt((host_u[k].x * host_u[k].x + host_u[k].y * host_u[k].y) / (ggg * host_s[k].y / host_s[k].x));
-        //    Temp = host_s[k].y / host_s[k].x;
-        //}
-        //fout2 << x / 184.0 << " " << y / 184.0 << " " << host_s[k].x << " " << host_s[k].y <<//
-        //    " " << host_u[k].x << " " << host_u[k].y << " " << //
-        //    Max << " " << Temp << endl;
-    }
+        //fout << x << " " << y << " " << host_s[k].x << " " << host_s[k].y <<//
+        //    " " << host_u[k].x << " " << host_u[k].y << endl;
 
-    //for (int k = 0; k < K; k++)
-    //{
-    //    int n = k % N;                                   // номер ячейки по x (от 0)
-    //    int m = (k - n) / N;
-    //    if ((m < M - 1) && (n < N - 1))
-    //    {
-    //        fout2 << m * N + n + 1 << " " << m * N + n + 2 << " " << (m + 1) * N + n + 2 << " " << (m + 1) * N + n + 1 << endl;
-    //    }
-    //}for (int k = 0; k < K; k++)
-    //{
-    //    int n = k % N;                                   // номер ячейки по x (от 0)
-    //    int m = (k - n) / N;
-    //    if ((m < M - 1) && (n < N - 1))
-    //    {
-    //        fout2 << m * N + n + 1 << " " << m * N + n + 2 << " " << (m + 1) * N + n + 2 << " " << (m + 1) * N + n + 1 << endl;
-    //    }
-    //}
+        fout.write((char*)&x, sizeof(x));
+        fout.write((char*)&y, sizeof(y));
+        fout.write((char*)&host_s[k].x, sizeof(host_s[k].x));
+        fout.write((char*)&host_s[k].y, sizeof(host_s[k].y));
+        fout.write((char*)&host_u[k].x, sizeof(host_u[k].x));
+        fout.write((char*)&host_u[k].y, sizeof(host_u[k].y));
+
+    }
 
     
     for (int k = 0; k < N; k++)
